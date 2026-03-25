@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: auditlog-manager
 repo: github.com/kyma-project/auditlog-manager.git
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: kyma-project.io
+  group: auditlogmanager
+  kind: AuditLog
+  path: github.com/kyma-project/auditlog-manager.git/api/v1beta1
+  version: v1beta1
 version: "3"

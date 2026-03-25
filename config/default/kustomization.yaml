@@ -1,5 +1,5 @@
 # Adds namespace to all resources.
-namespace: auditlog-manager-system
+namespace: kcp-system
 
 # Value of this field is prepended to the
 # names of all resources, e.g. a deployment named
@@ -15,7 +15,7 @@ namePrefix: auditlog-manager-
 #    someName: someValue
 
 resources:
-#- ../crd
+- ../crd
 - ../rbac
 - ../manager
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in

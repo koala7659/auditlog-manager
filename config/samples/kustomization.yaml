@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- auditlogmanager_v1beta1_auditlog.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

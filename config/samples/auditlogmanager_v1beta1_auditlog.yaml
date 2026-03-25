@@ -1,0 +1,12 @@
+apiVersion: auditlogmanager.kyma-project.io/v1beta1
+kind: AuditLog
+metadata:
+  labels:
+    app.kubernetes.io/name: auditlog-manager
+    app.kubernetes.io/managed-by: kustomize
+  name: auditlog-sample
+spec:
+  region: "test-region"
+  runtimeID: "test-runtime-id"
+  subaccountID: "test-subaccount-id"
+  tenantID: "test-tenant-id"
