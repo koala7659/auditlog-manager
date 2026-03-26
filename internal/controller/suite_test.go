@@ -33,7 +33,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	auditlogmanagerkymaprojectiov1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
 	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
 	// +kubebuilder:scaffold:imports
 )
@@ -61,9 +60,6 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = auditlogmanagerkymaprojectiov1beta1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	err = auditlogmanagerv1beta1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 

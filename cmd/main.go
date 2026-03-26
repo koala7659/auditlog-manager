@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	auditlogmanagerkymaprojectiov1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
 	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
 	"github.com/kyma-project/auditlog-manager.git/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -48,7 +47,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(auditlogmanagerkymaprojectiov1beta1.AddToScheme(scheme))
 	utilruntime.Must(auditlogmanagerv1beta1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -147,10 +145,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.AuditLogReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err := controller.NewAuditLogReconciler(mgr).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "AuditLog")
 		os.Exit(1)
 	}
