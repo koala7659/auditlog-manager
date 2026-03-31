@@ -28,7 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/kyma-project/auditlog-manager.git/test/utils"
+	"github.com/kyma-project/auditlog-manager/test/utils"
 )
 
 var (

@@ -1,4 +1,4 @@
-module github.com/kyma-project/auditlog-manager.git
+module github.com/kyma-project/auditlog-manager
 
 go 1.25.3
 

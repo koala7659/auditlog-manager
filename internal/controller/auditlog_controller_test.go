@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
+	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager/api/v1beta1"
 )
 
 var _ = Describe("AuditLog Controller", func() {
@@ -69,8 +69,8 @@ var _ = Describe("AuditLog Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &AuditLogReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				KCPClient: k8sClient,
+				Scheme:    k8sClient.Scheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

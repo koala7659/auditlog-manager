@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/kyma-project/auditlog-manager/internal/btp"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -37,8 +38,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
-	"github.com/kyma-project/auditlog-manager.git/internal/controller"
+	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager/api/v1beta1"
+	"github.com/kyma-project/auditlog-manager/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -60,6 +61,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
+	var btpCredentials string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -67,6 +69,9 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 
+	flag.StringVar(&btpCredentials, "btp-credentials-path", "credentials.yaml", "The path to the file with credentials to SAP Cloud Management Service")
+
+	// TODO: consider removing secure-metric feature
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
@@ -150,11 +155,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// here create BTP client from secret credentials
+	// here create BTP client from secret credentials to create audit log services
+	btpClient, err := btp.NewBtpClient(btpCredentials)
+
+	if err != nil {
+		setupLog.Error(err, "Failed to create btp.BTPClient")
+		os.Exit(1)
+	}
 
 	// here create Gardner client to store Audit log credentials as secret
+	//gardenerClinet :=
 
-	if err := controller.NewAuditLogReconciler(mgr).SetupWithManager(mgr); err != nil {
+	if err := controller.NewAuditLogReconciler(mgr, nil, btpClient).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "AuditLog")
 		os.Exit(1)
 	}

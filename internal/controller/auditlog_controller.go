@@ -1,62 +1,55 @@
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	"github.com/kyma-project/auditlog-manager/internal/btp"
+	"github.com/kyma-project/auditlog-manager/internal/controller/fsm"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager.git/api/v1beta1"
+	auditlogmanagerv1beta1 "github.com/kyma-project/auditlog-manager/api/v1beta1"
 )
 
 const (
 	requeueInterval      = 5 * time.Second
 	requeueErrorInterval = 30 * time.Second
-	finalizer            = "auditlogmanager.kyma-project.io/finalizer"
-	fieldOwner           = "auditlogmanager.kyma-project.io/owner"
 )
 
 // AuditLogReconciler reconciles a AuditLog object
 type AuditLogReconciler struct {
-	client.Client
-	Scheme *runtime.Scheme
-	record.EventRecorder
+	KCPClient     client.Client
+	GardenClient  client.Client
+	Scheme        *runtime.Scheme
+	EventRecorder record.EventRecorder
+	Cfg           fsm.FSMCfg
+	BTPClient     btp.BTPClient
 }
 
-func NewAuditLogReconciler(mgr ctrl.Manager) *AuditLogReconciler {
+func NewAuditLogReconciler(mgr ctrl.Manager, gardenerClient client.Client, btpClient btp.BTPClient) *AuditLogReconciler {
 	return &AuditLogReconciler{
-		Client:        mgr.GetClient(),
+		KCPClient:     mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		EventRecorder: mgr.GetEventRecorderFor("auditlog-controller"),
+		GardenClient:  gardenerClient,
+		BTPClient:     btpClient,
+		Cfg:           fsm.FSMCfg{},
 	}
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *AuditLogReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&auditlogmanagerv1beta1.AuditLog{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("auditlog-controller").
+		Complete(r)
 }
 
 // +kubebuilder:rbac:groups=auditlogmanager.kyma-project.io,resources=auditlogs,verbs=get;list;watch;create;update;patch;delete
@@ -67,9 +60,10 @@ func NewAuditLogReconciler(mgr ctrl.Manager) *AuditLogReconciler {
 func (r *AuditLogReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 	logger.Info("Reconciling AuditLog resource")
+	logger.Info(req.String())
 
-	instance := &auditlogmanagerv1beta1.AuditLog{}
-	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
+	instance := auditlogmanagerv1beta1.AuditLog{}
+	if err := r.KCPClient.Get(ctx, req.NamespacedName, &instance); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("AuditLog resource not found, assuming it was deleted")
 			return ctrl.Result{}, nil
@@ -77,44 +71,20 @@ func (r *AuditLogReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	// Handle deletion
-	if !instance.DeletionTimestamp.IsZero() {
-		return r.handleDeletingState(ctx, instance)
-	}
+	stateFSM := fsm.NewFsm(
+		r.Cfg,
+		fsm.K8s{
+			KcpClient:     r.KCPClient,
+			GardenClient:  r.GardenClient,
+			EventRecorder: r.EventRecorder,
+		},
+		r.BTPClient,
+	)
 
-	// Add finalizer if missing
-	if !controllerutil.ContainsFinalizer(instance, finalizer) {
-		logger.Info("Adding finalizer")
-		controllerutil.AddFinalizer(instance, finalizer)
-		if err := r.Update(ctx, instance); err != nil {
-			if apierrors.IsConflict(err) {
-				// Conflict error is expected when there are concurrent updates
-				// Controller-runtime will automatically retry
-				logger.Info("Conflict updating finalizer, will retry")
-				return ctrl.Result{Requeue: true}, nil
-			}
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	// State machine dispatch
-	switch instance.Status.State {
-	case "":
-		return r.handleInitialState(ctx, instance)
-	case auditlogmanagerv1beta1.StateProcessing:
-		return r.handleProcessingState(ctx, instance)
-	case auditlogmanagerv1beta1.StateDeleting:
-		return r.handleDeletingState(ctx, instance)
-	case auditlogmanagerv1beta1.StateError:
-		return r.handleErrorState(ctx, instance)
-	case auditlogmanagerv1beta1.StateReady, auditlogmanagerv1beta1.StateWarning:
-		return r.handleReadyState(ctx, instance)
-	default:
-		return r.handleInitialState(ctx, instance)
-	}
+	return stateFSM.Run(ctx, instance)
 }
 
+/*
 func (r *AuditLogReconciler) handleInitialState(ctx context.Context, instance *auditlogmanagerv1beta1.AuditLog) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 	logger.Info("Handling initial state")
@@ -201,63 +171,6 @@ func (r *AuditLogReconciler) handleErrorState(ctx context.Context, instance *aud
 	return ctrl.Result{RequeueAfter: requeueErrorInterval}, nil
 }
 
-func (r *AuditLogReconciler) handleDeletingState(ctx context.Context, instance *auditlogmanagerv1beta1.AuditLog) (ctrl.Result, error) {
-	logger := logf.FromContext(ctx)
-	logger.Info("Handling deleting state")
-
-	if !controllerutil.ContainsFinalizer(instance, finalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	// Transition to Deleting state if not already
-	if instance.Status.State != auditlogmanagerv1beta1.StateDeleting {
-		logger.Info("Transitioning to Deleting state")
-		instance.Status.WithState(auditlogmanagerv1beta1.StateDeleting).
-			WithInstallConditionStatus(metav1.ConditionFalse, instance.Generation)
-
-		if err := r.setInstanceStatus(ctx, instance); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		// Requeue to continue with cleanup in next reconciliation
-		// This ensures status is persisted before starting cleanup
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	// Check if cleanup is complete
-	cleanupComplete, err := r.isCleanupComplete(ctx, instance)
-	if err != nil {
-		logger.Error(err, "Failed to check cleanup status")
-		return ctrl.Result{}, err
-	}
-
-	if !cleanupComplete {
-		logger.Info("Cleanup in progress, performing cleanup operations")
-		if err := r.cleanupAuditLogResources(ctx, instance); err != nil {
-			logger.Error(err, "Failed to cleanup resources")
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
-		}
-
-		// Requeue to check cleanup status again
-		logger.Info("Cleanup operations executed, will verify completion")
-		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
-	}
-
-	// Cleanup is complete, remove finalizer
-	logger.Info("Cleanup complete, removing finalizer")
-	controllerutil.RemoveFinalizer(instance, finalizer)
-	if err := r.Update(ctx, instance); err != nil {
-		if apierrors.IsConflict(err) {
-			logger.Info("Conflict removing finalizer, will retry")
-			return ctrl.Result{Requeue: true}, nil
-		}
-		return ctrl.Result{}, err
-	}
-
-	r.Event(instance, corev1.EventTypeNormal, "Deleted", "Successfully deleted AuditLog resource")
-	return ctrl.Result{}, nil
-}
-
 func (r *AuditLogReconciler) setInstanceStatus(ctx context.Context, instance *auditlogmanagerv1beta1.AuditLog) error {
 	return r.setStatusForObjectInstance(ctx, instance)
 }
@@ -340,43 +253,7 @@ func (r *AuditLogReconciler) verifyAuditLogResources(ctx context.Context, instan
 	return nil
 }
 
-// cleanupAuditLogResources performs cleanup when AuditLog is deleted
-// TODO: Implement actual cleanup logic
-func (r *AuditLogReconciler) cleanupAuditLogResources(ctx context.Context, instance *auditlogmanagerv1beta1.AuditLog) error {
-	logger := logf.FromContext(ctx)
 
-	// Check if cleanup timestamp annotation exists
-	if instance.Annotations == nil {
-		instance.Annotations = make(map[string]string)
-	}
-
-	cleanupStartTime, exists := instance.Annotations["auditlogmanager.kyma-project.io/cleanup-started"]
-	if !exists {
-		// First time entering cleanup - record the start time
-		instance.Annotations["auditlogmanager.kyma-project.io/cleanup-started"] = time.Now().Format(time.RFC3339)
-		if err := r.Update(ctx, instance); err != nil {
-			if apierrors.IsConflict(err) {
-				logger.Info("Conflict updating cleanup annotation, will retry")
-				return nil
-			}
-			return err
-		}
-		logger.Info("Started cleanup process, recorded timestamp")
-		return nil
-	}
-
-	logger.Info("Cleanup in progress",
-		"startTime", cleanupStartTime,
-		"elapsed", time.Since(parseTime(cleanupStartTime)).String())
-
-	// STUB: Actual implementation will:
-	// - Delete owned resources (DaemonSets, ConfigMaps, Secrets)
-	// - Deregister from external audit log service
-	// - Clean up temporary data
-	// - Revoke credentials
-
-	return nil
-}
 
 // isCleanupComplete checks if all cleanup operations have finished
 // Returns true if cleanup is complete, false if still in progress
@@ -425,11 +302,4 @@ func parseTime(timeStr string) time.Time {
 	}
 	return t
 }
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *AuditLogReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&auditlogmanagerv1beta1.AuditLog{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Named("auditlog").
-		Complete(r)
-}
+*/
