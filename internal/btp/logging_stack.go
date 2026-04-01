@@ -1,42 +1,92 @@
+// Package btp provides a client for managing SAP BTP audit logging services.
+//
+// The package handles the complete lifecycle of audit log stacks including:
+//   - Service Manager binding creation and management
+//   - Audit log service instance provisioning
+//   - Status verification and monitoring
+//
+// Example usage:
+//
+//	client, err := btp.NewBtpClient("/path/to/credentials.json")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Create logging stack
+//	err = client.CreateLoggingStack(ctx, tenantID)
+//
+//	// Verify status
+//	status, err := client.VerifyLoggingStack(ctx, tenantID)
+//
+//	// Delete logging stack
+//	err = client.DeleteLoggingStack(ctx, tenantID)
 package btp
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
+	"github.com/kyma-project/auditlog-manager/internal/btp/auth"
 )
 
+// InstallStatus represents the current state of an audit logging stack installation.
 type InstallStatus string
 
 const (
-	NoInstallationStatus    InstallStatus = "NoInstallation"
-	InstallStatusReady      InstallStatus = "Ready"
+	// NoInstallationStatus indicates no audit log installation exists for the tenant.
+	NoInstallationStatus InstallStatus = "NoInstallation"
+	// InstallStatusReady indicates the audit log stack is fully operational.
+	InstallStatusReady InstallStatus = "Ready"
+	// InstallStatusProcessing indicates the audit log stack is being created or updated.
 	InstallStatusProcessing InstallStatus = "Processing"
-	InstallStatusError      InstallStatus = "Error"
+	// InstallStatusError indicates the audit log stack encountered an error.
+	InstallStatusError InstallStatus = "Error"
 )
 
+// BTPClient provides operations for managing BTP audit logging stacks.
+//
+// All operations are idempotent and safe to retry. The client automatically
+// handles Service Manager authentication and resource provisioning.
 type BTPClient interface {
+	// CreateLoggingStack creates a complete audit logging stack for the given tenant.
+	// This includes Service Manager binding and both auditlog-management and auditlog instances.
+	// The operation is idempotent - existing resources are reused.
 	CreateLoggingStack(ctx context.Context, tenantID string) error
+
+	// DeleteLoggingStack removes all audit logging resources for the given tenant.
+	// This includes service instances, bindings, and the Service Manager binding.
+	// Missing resources are silently ignored.
 	DeleteLoggingStack(ctx context.Context, tenantID string) error
+
+	// VerifyLoggingStack checks the current installation status for the given tenant.
+	// Returns the current state and any errors encountered during verification.
 	VerifyLoggingStack(ctx context.Context, tenantID string) (InstallStatus, error)
 }
 
+// btpClient implements BTPClient with authenticated access to BTP services.
 type btpClient struct {
 	client      *Client
 	credentials *Credentials
-	token       *XSUAAToken
+	token       *auth.Token
+	timeout     time.Duration
 }
 
-// NewBtpClient creates a new BTP client with authentication
-func NewBtpClient(credentialPath string) (BTPClient, error) {
-	// Load credentials from file
+// NewBtpClient creates a new authenticated BTP client.
+//
+// The credentials file must contain:
+//   - UAA authentication details (URL, client ID, client secret)
+//   - BTP service endpoints (accounts service URL, etc.)
+//
+// Returns an error if the credentials file cannot be loaded or authentication fails.
+func NewBtpClient(credentialPath string, timeout time.Duration) (BTPClient, error) {
 	creds, err := LoadCredentials(credentialPath)
 	if err != nil {
 		return nil, err
 	}
 
-	// Authenticate with XSUAA to get OAuth token
-	token, err := GetOAuthToken(
+	token, err := auth.GetToken(
 		"client_credentials",
 		creds.UAA.URL,
 		creds.UAA.ClientID,
@@ -46,39 +96,35 @@ func NewBtpClient(credentialPath string) (BTPClient, error) {
 		return nil, err
 	}
 
-	// Create HTTP client with OAuth transport
-	httpClient := NewClient(DefaultHTTPTimeout, token)
+	httpClient := NewClient(timeout, token)
 
 	return &btpClient{
 		client:      httpClient,
 		credentials: creds,
 		token:       token,
+		timeout:     timeout,
 	}, nil
 }
 
-// CreateLoggingStack creates the audit logging stack for a given tenant
+// CreateLoggingStack creates the audit logging stack for a given tenant.
 func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) error {
-	// Step 1: Check if Service Manager binding already exists
 	exists, smCreds, err := c.serviceManagerBindingExists(ctx, tenantID)
 	if err != nil {
 		return err
 	}
 
 	if !exists || smCreds == nil {
-		// Create Service Manager binding
 		smCreds, err = c.addServiceManagerBinding(ctx, tenantID)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Step 2: Authenticate with Service Manager
 	smClient, smURL, err := c.authenticateServiceManager(smCreds)
 	if err != nil {
 		return err
 	}
 
-	// Step 3: Create auditlog-management instance with binding
 	if err := c.addServiceInstanceWithBinding(
 		ctx,
 		smClient,
@@ -90,7 +136,6 @@ func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) err
 		return err
 	}
 
-	// Step 4: Create auditlog instance with binding
 	if err := c.addServiceInstanceWithBinding(
 		ctx,
 		smClient,
@@ -105,38 +150,30 @@ func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) err
 	return nil
 }
 
-// DeleteLoggingStack deletes the audit logging stack for a given tenant
+// DeleteLoggingStack deletes the audit logging stack for a given tenant.
 func (c *btpClient) DeleteLoggingStack(ctx context.Context, tenantID string) error {
-	// Step 1: Check if Service Manager binding exists
 	exists, smCreds, err := c.serviceManagerBindingExists(ctx, tenantID)
 	if err != nil {
 		return err
 	}
 
 	if !exists || smCreds == nil {
-		// Nothing to delete
 		return nil
 	}
 
-	// Step 2: Authenticate with Service Manager
 	smClient, smURL, err := c.authenticateServiceManager(smCreds)
 	if err != nil {
 		return err
 	}
 
-	// Step 3: Delete auditlog instance (and its bindings)
 	if err := c.deleteServiceInstance(ctx, smClient, smURL, InstanceNameAuditlog); err != nil {
-		// Log error but continue with deletion
 		return err
 	}
 
-	// Step 4: Delete auditlog-management instance (and its bindings)
 	if err := c.deleteServiceInstance(ctx, smClient, smURL, InstanceNameAuditlogManagement); err != nil {
-		// Log error but continue with deletion
 		return err
 	}
 
-	// Step 5: Delete Service Manager binding
 	if err := c.deleteServiceManagerBinding(ctx, tenantID); err != nil {
 		return err
 	}
@@ -144,45 +181,37 @@ func (c *btpClient) DeleteLoggingStack(ctx context.Context, tenantID string) err
 	return nil
 }
 
-// VerifyLoggingStack verifies the status of the logging stack for a given tenant
+// VerifyLoggingStack verifies the installation status of the logging stack for a given tenant.
 func (c *btpClient) VerifyLoggingStack(ctx context.Context, tenantID string) (InstallStatus, error) {
-	// Step 1: Check if Service Manager binding exists
 	exists, smCreds, err := c.serviceManagerBindingExists(ctx, tenantID)
 	if err != nil {
 		return InstallStatusError, err
 	}
 
 	if !exists || smCreds == nil {
-		// No installation exists
 		return NoInstallationStatus, nil
 	}
 
-	// Step 2: Authenticate with Service Manager
 	smClient, smURL, err := c.authenticateServiceManager(smCreds)
 	if err != nil {
 		return InstallStatusError, err
 	}
 
-	// Step 3: Check auditlog-management instance
 	managementExists, err := c.serviceInstanceExists(ctx, smClient, smURL, InstanceNameAuditlogManagement)
 	if err != nil {
 		return InstallStatusError, err
 	}
 
-	// Step 4: Check auditlog instance
 	auditlogExists, err := c.serviceInstanceExists(ctx, smClient, smURL, InstanceNameAuditlog)
 	if err != nil {
 		return InstallStatusError, err
 	}
 
-	// If neither instance exists, no installation
 	if !managementExists && !auditlogExists {
 		return NoInstallationStatus, nil
 	}
 
-	// If both instances exist, need to check if they are ready
 	if managementExists && auditlogExists {
-		// Get instance details to check ready status
 		managementReady, err := c.isServiceInstanceReady(ctx, smClient, smURL, InstanceNameAuditlogManagement)
 		if err != nil {
 			return InstallStatusError, err
@@ -193,16 +222,13 @@ func (c *btpClient) VerifyLoggingStack(ctx context.Context, tenantID string) (In
 			return InstallStatusError, err
 		}
 
-		// Both instances ready
 		if managementReady && auditlogReady {
 			return InstallStatusReady, nil
 		}
 
-		// At least one instance not ready
 		return InstallStatusProcessing, nil
 	}
 
-	// Partial installation - still processing
 	return InstallStatusProcessing, nil
 }
 
@@ -230,7 +256,6 @@ func (c *btpClient) isServiceInstanceReady(ctx context.Context, smClient *Client
 		if ready, ok := instance["ready"].(bool); ok {
 			return ready, nil
 		}
-		// If ready field is missing, assume not ready
 		return false, nil
 	}
 

@@ -39,6 +39,7 @@ func sFnRun(ctx context.Context, m *fsm, s *systemState) (stateFn, *ctrl.Result,
 		if instanceHasFinalizer {
 			return removeFinalizerAndStop(ctx, m, s)
 		}
+		logger.Info("Stop processing auditlog instance", "instance", s.instance.Name)
 		return stop()
 	}
 
@@ -50,6 +51,7 @@ func sFnRun(ctx context.Context, m *fsm, s *systemState) (stateFn, *ctrl.Result,
 		return switchState(sFnCreateResources)
 	}
 
+	logger.Info("Stop processing auditlog instance", "instance", s.instance.Name)
 	return stop()
 }
 

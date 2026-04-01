@@ -1,18 +1,17 @@
 package btp
 
-import "time"
-
 const (
-	// Service offering and plan names
+	// ServiceOfferingAuditlogManagement is the BTP service offering name for audit log management.
 	ServiceOfferingAuditlogManagement = "auditlog-management"
-	ServicePlanAuditlogManagement     = "default"
-	ServiceOfferingAuditlog           = "auditlog"
-	ServicePlanAuditlog               = "standard"
+	// ServicePlanAuditlogManagement is the service plan for audit log management.
+	ServicePlanAuditlogManagement = "default"
+	// ServiceOfferingAuditlog is the BTP service offering name for audit logging.
+	ServiceOfferingAuditlog = "auditlog"
+	// ServicePlanAuditlog is the service plan for audit logging.
+	ServicePlanAuditlog = "standard"
 
-	// Instance naming
+	// InstanceNameAuditlogManagement is the default instance name for audit log management.
 	InstanceNameAuditlogManagement = "auditlog-management-instance"
-	InstanceNameAuditlog           = "auditlog-instance"
-
-	// Timeouts
-	DefaultHTTPTimeout = 30 * time.Second
+	// InstanceNameAuditlog is the default instance name for audit logging.
+	InstanceNameAuditlog = "auditlog-instance"
 )

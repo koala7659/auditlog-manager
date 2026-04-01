@@ -5,105 +5,95 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/kyma-project/auditlog-manager/internal/btp/auth"
 )
 
 // serviceManagerBindingExists checks if a Service Manager binding exists for the given subaccount
 func (c *btpClient) serviceManagerBindingExists(ctx context.Context, subaccountGUID string) (bool, *ServiceManagerCredentials, error) {
 	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
 	if accountsServiceURL == "" {
-		return false, nil, fmt.Errorf("accounts_service_url not found in credentials")
+		return false, nil, fmt.Errorf("accounts_service_url not found in credentials for subaccount %s", subaccountGUID)
 	}
 
-	// Construct endpoint for V1 API
 	endpoint := fmt.Sprintf("%s/accounts/v1/subaccounts/%s/serviceManagementBinding", accountsServiceURL, subaccountGUID)
 
-	// Send GET request
 	resp, err := c.client.Get(ctx, endpoint, RequestOptions{})
 	if err != nil {
-		// If error contains "not found" or similar, binding doesn't exist
 		if resp != nil && resp.StatusCode == 404 {
 			return false, nil, nil
 		}
-		return false, nil, fmt.Errorf("failed to check service manager binding: %w", err)
+		return false, nil, fmt.Errorf("failed to check Service Manager binding for subaccount %s: %w", subaccountGUID, err)
 	}
 
-	// Status 200 means binding exists
 	if resp.StatusCode == 200 {
-		// Parse credentials from response
 		var smCreds ServiceManagerCredentials
 		if err := json.Unmarshal(resp.Body, &smCreds); err != nil {
-			return true, nil, fmt.Errorf("binding exists but failed to parse credentials: %w", err)
+			return true, nil, fmt.Errorf("Service Manager binding exists but failed to parse credentials for subaccount %s: %w", subaccountGUID, err)
 		}
 		return true, &smCreds, nil
 	}
 
-	// Status 404 means binding doesn't exist
 	if resp.StatusCode == 404 {
 		return false, nil, nil
 	}
 
-	// Other status codes are unexpected
-	return false, nil, fmt.Errorf("unexpected status code %d when checking binding", resp.StatusCode)
+	return false, nil, fmt.Errorf("unexpected status code %d when checking Service Manager binding for subaccount %s", resp.StatusCode, subaccountGUID)
 }
 
 // addServiceManagerBinding creates a Service Manager binding for the given subaccount
 func (c *btpClient) addServiceManagerBinding(ctx context.Context, subaccountGUID string) (*ServiceManagerCredentials, error) {
 	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
 	if accountsServiceURL == "" {
-		return nil, fmt.Errorf("accounts_service_url not found in credentials")
+		return nil, fmt.Errorf("accounts_service_url not found in credentials for subaccount %s", subaccountGUID)
 	}
 
-	// Construct endpoint for V1 API
 	endpoint := fmt.Sprintf("%s/accounts/v1/subaccounts/%s/serviceManagementBinding", accountsServiceURL, subaccountGUID)
 
-	// Send POST request with empty body for basic credentials
 	resp, err := c.client.Post(ctx, endpoint, RequestOptions{
 		Body:    bytes.NewReader([]byte("{}")),
 		Headers: map[string]string{"Content-Type": "application/json"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create service manager binding request failed: %w", err)
+		return nil, fmt.Errorf("failed to create Service Manager binding for subaccount %s: %w", subaccountGUID, err)
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		// Parse credentials from response
 		var smCreds ServiceManagerCredentials
 		if err := json.Unmarshal(resp.Body, &smCreds); err != nil {
-			return nil, fmt.Errorf("failed to parse service manager credentials: %w", err)
+			return nil, fmt.Errorf("failed to parse Service Manager credentials for subaccount %s: %w", subaccountGUID, err)
 		}
 
 		return &smCreds, nil
 	}
 
-	return nil, fmt.Errorf("create service manager binding failed with status code: %d", resp.StatusCode)
+	return nil, fmt.Errorf("failed to create Service Manager binding for subaccount %s (status %d)", subaccountGUID, resp.StatusCode)
 }
 
 // deleteServiceManagerBinding deletes the Service Manager binding for the given subaccount
 func (c *btpClient) deleteServiceManagerBinding(ctx context.Context, subaccountGUID string) error {
 	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
 	if accountsServiceURL == "" {
-		return fmt.Errorf("accounts_service_url not found in credentials")
+		return fmt.Errorf("accounts_service_url not found in credentials for subaccount %s", subaccountGUID)
 	}
 
-	// Construct endpoint for V1 API
 	endpoint := fmt.Sprintf("%s/accounts/v1/subaccounts/%s/serviceManagementBinding", accountsServiceURL, subaccountGUID)
 
-	// Send DELETE request
 	resp, err := c.client.Delete(ctx, endpoint, RequestOptions{})
 	if err != nil {
-		return fmt.Errorf("delete service manager binding request failed: %w", err)
+		return fmt.Errorf("failed to delete Service Manager binding for subaccount %s: %w", subaccountGUID, err)
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
 
-	return fmt.Errorf("delete service manager binding failed with status code: %d", resp.StatusCode)
+	return fmt.Errorf("failed to delete Service Manager binding for subaccount %s (status %d)", subaccountGUID, resp.StatusCode)
 }
 
 // authenticateServiceManager authenticates with Service Manager using binding credentials
 func (c *btpClient) authenticateServiceManager(smCreds *ServiceManagerCredentials) (*Client, string, error) {
-	token, err := GetOAuthToken(
+	token, err := auth.GetToken(
 		"client_credentials",
 		smCreds.TokenURL,
 		smCreds.ClientID,
@@ -113,12 +103,11 @@ func (c *btpClient) authenticateServiceManager(smCreds *ServiceManagerCredential
 		return nil, "", fmt.Errorf("failed to get Service Manager token: %w", err)
 	}
 
-	return NewClient(DefaultHTTPTimeout, token), smCreds.SMURL, nil
+	return NewClient(c.timeout, token), smCreds.SMURL, nil
 }
 
 // serviceInstanceExists checks if a service instance with the given name exists
 func (c *btpClient) serviceInstanceExists(ctx context.Context, smClient *Client, smURL, instanceName string) (bool, error) {
-	// Use query parameters with proper URL encoding
 	listEndpoint := fmt.Sprintf("%s/v1/service_instances", smURL)
 	listResp, err := smClient.Get(ctx, listEndpoint, RequestOptions{
 		Query: map[string]string{
@@ -140,8 +129,6 @@ func (c *btpClient) serviceInstanceExists(ctx context.Context, smClient *Client,
 	if len(listResult.Items) > 0 {
 		instance := listResult.Items[0]
 
-		// Additional verification - check service_plan_id exists
-		// This ensures it's the right type of service
 		if _, ok := instance["service_plan_id"].(string); !ok {
 			return false, fmt.Errorf("instance exists but missing service_plan_id - may be invalid")
 		}
@@ -186,7 +173,6 @@ func (c *btpClient) getServiceInstanceID(ctx context.Context, smClient *Client, 
 
 // createServiceInstance creates a service instance with the given parameters
 func (c *btpClient) createServiceInstance(ctx context.Context, smClient *Client, smURL, instanceName, serviceOfferingName, servicePlanName string) (string, error) {
-	// Use format=cpcli as per BTP CLI
 	createEndpoint := fmt.Sprintf("%s/v1/service_instances?format=cpcli", smURL)
 
 	payload := map[string]interface{}{
@@ -197,21 +183,19 @@ func (c *btpClient) createServiceInstance(ctx context.Context, smClient *Client,
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request payload: %w", err)
+		return "", fmt.Errorf("failed to marshal service instance payload for %s: %w", instanceName, err)
 	}
 
-	// Send POST request
 	createResp, err := smClient.Post(ctx, createEndpoint, RequestOptions{
 		Body:    bytes.NewReader(body),
 		Headers: map[string]string{"Content-Type": "application/json"},
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("create service instance request failed: %w", err)
+		return "", fmt.Errorf("failed to create service instance %s (%s/%s): %w", instanceName, serviceOfferingName, servicePlanName, err)
 	}
 
 	if createResp.StatusCode >= 200 && createResp.StatusCode < 300 {
-		// Extract instance ID from response
 		var instanceResponse map[string]interface{}
 		var instanceID string
 		if err := json.Unmarshal(createResp.Body, &instanceResponse); err == nil {
@@ -221,10 +205,10 @@ func (c *btpClient) createServiceInstance(ctx context.Context, smClient *Client,
 			}
 		}
 
-		return "", fmt.Errorf("instance created but ID not found in response")
+		return "", fmt.Errorf("service instance %s created but ID not found in response", instanceName)
 	}
 
-	return "", fmt.Errorf("create service instance failed with status code: %d", createResp.StatusCode)
+	return "", fmt.Errorf("failed to create service instance %s (status %d)", instanceName, createResp.StatusCode)
 }
 
 // listServiceBindingsForInstance retrieves all bindings for a service instance

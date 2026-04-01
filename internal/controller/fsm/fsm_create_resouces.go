@@ -23,7 +23,6 @@ func sFnCreateResources(ctx context.Context, m *fsm, s *systemState) (stateFn, *
 
 	logger.Info("Creating Resources for instance", "instance", s.instance.Name, "tenantID", s.instance.Spec.TenantID)
 
-	// Call BTP client with error handling
 	if err := m.BTPClient.CreateLoggingStack(ctx, s.instance.Spec.TenantID); err != nil {
 		logger.Error(err, "Failed to create logging stack")
 		s.instance.Status.WithState(auditlogmanagerv1beta1.StateError).

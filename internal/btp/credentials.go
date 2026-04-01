@@ -6,13 +6,14 @@ import (
 	"os"
 )
 
-// Credentials represents the structure of BTP credentials file
+// Credentials contains BTP service credentials and endpoints.
+// This structure maps to the credentials JSON file format.
 type Credentials struct {
 	Endpoints map[string]string `json:"endpoints"`
 	UAA       UAA               `json:"uaa"`
 }
 
-// UAA contains XSUAA authentication credentials
+// UAA contains XSUAA authentication credentials for OAuth2 client credentials flow.
 type UAA struct {
 	APIurl            string `json:"apiurl"`
 	ClientID          string `json:"clientid"`
@@ -33,7 +34,7 @@ type UAA struct {
 	ZoneID            string `json:"zoneid"`
 }
 
-// ServiceManagerCredentials represents Service Manager binding credentials
+// ServiceManagerCredentials contains authentication details for Service Manager API access.
 type ServiceManagerCredentials struct {
 	ClientID     string `json:"clientid"`
 	ClientSecret string `json:"clientsecret"`
@@ -43,7 +44,12 @@ type ServiceManagerCredentials struct {
 	XSAppname    string `json:"xsappname"`
 }
 
-// LoadCredentials loads and parses BTP credentials from a file
+// LoadCredentials loads and validates BTP credentials from a JSON file.
+//
+// The file must contain valid JSON with UAA credentials and service endpoints.
+// Required fields are validated after parsing.
+//
+// Returns an error if the file cannot be read, parsed, or is invalid.
 func LoadCredentials(path string) (*Credentials, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -55,15 +61,13 @@ func LoadCredentials(path string) (*Credentials, error) {
 		return nil, fmt.Errorf("failed to parse credentials JSON: %w", err)
 	}
 
-	// Validate required fields
 	if err := validateCredentials(&creds); err != nil {
-		return nil, fmt.Errorf("invalid credentials: %w", err)
+		return nil, err
 	}
 
 	return &creds, nil
 }
 
-// validateCredentials checks that required credential fields are present
 func validateCredentials(creds *Credentials) error {
 	if creds.UAA.URL == "" {
 		return fmt.Errorf("uaa.url is required")

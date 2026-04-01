@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/kyma-project/auditlog-manager/internal/btp"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -62,6 +63,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var btpCredentials string
+	var btpClientTimeout time.Duration
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -70,6 +73,8 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 
 	flag.StringVar(&btpCredentials, "btp-credentials-path", "credentials.yaml", "The path to the file with credentials to SAP Cloud Management Service")
+	//flag.Uint("btp-credentials-refresh-interval", 3600, "The interval in seconds for refreshing the BTP credentials")
+	flag.DurationVar(&btpClientTimeout, "btp-client-timeout", 30*time.Second, "The timeout for BTP client in seconds")
 
 	// TODO: consider removing secure-metric feature
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
@@ -155,11 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// here create BTP client from secret credentials to create audit log services
-	btpClient, err := btp.NewBtpClient(btpCredentials)
+	btpClient, err := btp.NewBtpClient(btpCredentials, btpClientTimeout)
 
 	if err != nil {
-		setupLog.Error(err, "Failed to create btp.BTPClient")
+		setupLog.Error(err, "Failed to create BTPClient")
 		os.Exit(1)
 	}
 
