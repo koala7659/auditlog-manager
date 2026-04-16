@@ -62,7 +62,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
-	var btpCredentials string
+	var btpCredsPath string
 	var btpClientTimeout time.Duration
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -72,7 +72,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 
-	flag.StringVar(&btpCredentials, "btp-credentials-path", "credentials.yaml", "The path to the file with credentials to SAP Cloud Management Service")
+	flag.StringVar(&btpCredsPath, "btp-credentials-path", "credentials.json", "The path to the file with credentials to SAP Cloud Management Service")
 	//flag.Uint("btp-credentials-refresh-interval", 3600, "The interval in seconds for refreshing the BTP credentials")
 	flag.DurationVar(&btpClientTimeout, "btp-client-timeout", 30*time.Second, "The timeout for BTP client in seconds")
 
@@ -160,10 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	btpClient, err := btp.NewBtpClient(btpCredentials, btpClientTimeout)
+	btpClient, err := btp.NewBtpClient(btpCredsPath, btpClientTimeout)
 
 	if err != nil {
-		setupLog.Error(err, "Failed to create BTPClient")
+		setupLog.Error(err, "Failed to create BTP Client")
 		os.Exit(1)
 	}
 

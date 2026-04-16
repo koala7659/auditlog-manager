@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kyma-project/auditlog-manager/internal/btp/auth"
@@ -63,6 +64,17 @@ type BTPClient interface {
 	// VerifyLoggingStack checks the current installation status for the given tenant.
 	// Returns the current state and any errors encountered during verification.
 	VerifyLoggingStack(ctx context.Context, tenantID string) (InstallStatus, error)
+
+	// CreateSubaccount creates a new BTP subaccount in the specified region.
+	// Returns the subaccount GUID on success.
+	CreateSubaccount(ctx context.Context, region, globalAccountID, displayName string, administrators []string) (string, error)
+
+	// GetSubaccount retrieves subaccount details for drift detection.
+	// Returns true if the subaccount exists, along with its current state.
+	GetSubaccount(ctx context.Context, subaccountGUID string) (exists bool, state string, err error)
+
+	// DeleteSubaccount deletes a BTP subaccount by its GUID.
+	DeleteSubaccount(ctx context.Context, subaccountGUID string) error
 }
 
 // btpClient implements BTPClient with authenticated access to BTP services.
@@ -107,24 +119,33 @@ func NewBtpClient(credentialPath string, timeout time.Duration) (BTPClient, erro
 }
 
 // CreateLoggingStack creates the audit logging stack for a given tenant.
+// For ADR architecture: first creates subaccount, then provisions services.
 func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) error {
-	exists, smCreds, err := c.serviceManagerBindingExists(ctx, tenantID)
+	// Step 1: Create BTP subaccount if it doesn't exist
+	// Note: In ADR architecture, subaccountID should be passed explicitly
+	// For now, using tenantID as subaccountID (to be refactored)
+	subaccountID := tenantID
+
+	// Step 2: Create Service Manager binding
+	exists, smCreds, err := c.serviceManagerBindingExists(ctx, subaccountID)
 	if err != nil {
 		return err
 	}
 
 	if !exists || smCreds == nil {
-		smCreds, err = c.addServiceManagerBinding(ctx, tenantID)
+		smCreds, err = c.addServiceManagerBinding(ctx, subaccountID)
 		if err != nil {
 			return err
 		}
 	}
 
+	// Step 3: Authenticate with Service Manager
 	smClient, smURL, err := c.authenticateServiceManager(smCreds)
 	if err != nil {
 		return err
 	}
 
+	// Step 4: Create auditlog-management service instance + binding
 	if err := c.addServiceInstanceWithBinding(
 		ctx,
 		smClient,
@@ -136,6 +157,7 @@ func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) err
 		return err
 	}
 
+	// Step 5: Create auditlog service instance + binding
 	if err := c.addServiceInstanceWithBinding(
 		ctx,
 		smClient,
@@ -151,8 +173,14 @@ func (c *btpClient) CreateLoggingStack(ctx context.Context, tenantID string) err
 }
 
 // DeleteLoggingStack deletes the audit logging stack for a given tenant.
+// For ADR architecture: deletes services first, then optionally deletes subaccount.
 func (c *btpClient) DeleteLoggingStack(ctx context.Context, tenantID string) error {
-	exists, smCreds, err := c.serviceManagerBindingExists(ctx, tenantID)
+	// Note: In ADR architecture, subaccountID should be passed explicitly
+	// For now, using tenantID as subaccountID (to be refactored)
+	subaccountID := tenantID
+
+	// Step 1: Check if Service Manager binding exists
+	exists, smCreds, err := c.serviceManagerBindingExists(ctx, subaccountID)
 	if err != nil {
 		return err
 	}
@@ -161,22 +189,29 @@ func (c *btpClient) DeleteLoggingStack(ctx context.Context, tenantID string) err
 		return nil
 	}
 
+	// Step 2: Authenticate with Service Manager
 	smClient, smURL, err := c.authenticateServiceManager(smCreds)
 	if err != nil {
 		return err
 	}
 
+	// Step 3: Delete auditlog service instance (includes bindings)
 	if err := c.deleteServiceInstance(ctx, smClient, smURL, InstanceNameAuditlog); err != nil {
 		return err
 	}
 
+	// Step 4: Delete auditlog-management service instance (includes bindings)
 	if err := c.deleteServiceInstance(ctx, smClient, smURL, InstanceNameAuditlogManagement); err != nil {
 		return err
 	}
 
-	if err := c.deleteServiceManagerBinding(ctx, tenantID); err != nil {
+	// Step 5: Delete Service Manager binding
+	if err := c.deleteServiceManagerBinding(ctx, subaccountID); err != nil {
 		return err
 	}
+
+	// Note: Subaccount deletion will be added when implementing full ADR architecture
+	// For now, we only delete the service instances
 
 	return nil
 }
@@ -260,4 +295,130 @@ func (c *btpClient) isServiceInstanceReady(ctx context.Context, smClient *Client
 	}
 
 	return false, nil
+}
+
+// CreateSubaccount creates a new BTP subaccount in the specified region.
+// Returns the subaccount GUID on success.
+//
+// This is a synchronous operation that creates the subaccount with the provided parameters.
+// The displayName should be unique to avoid conflicts.
+func (c *btpClient) CreateSubaccount(ctx context.Context, region, globalAccountID, displayName string, administrators []string) (string, error) {
+	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
+	if accountsServiceURL == "" {
+		return "", fmt.Errorf("accounts_service_url not found in credentials")
+	}
+
+	endpoint := accountsServiceURL + "/accounts/v1/subaccounts"
+
+	// Generate subdomain from display name (simplified - add random suffix in production)
+	subdomain := displayName
+
+	// Prepare request payload matching POC implementation
+	payload := map[string]interface{}{
+		"displayName":      displayName,
+		"subdomain":        subdomain,
+		"origin":           "API",
+		"region":           region,
+		"parentGUID":       globalAccountID,
+		"subaccountAdmins": administrators,
+	}
+
+	// Marshal payload to JSON
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request payload: %w", err)
+	}
+
+	// Send POST request
+	resp, err := c.client.Post(ctx, endpoint, RequestOptions{
+		Body:    strings.NewReader(string(bodyBytes)),
+		Headers: map[string]string{"Content-Type": "application/json"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("create subaccount request failed: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("subaccount creation failed with status code: %d", resp.StatusCode)
+	}
+
+	// Extract subaccount GUID from response
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(resp.Body, &responseData); err != nil {
+		return "", fmt.Errorf("failed to parse subaccount response: %w", err)
+	}
+
+	subaccountGUID, ok := responseData["guid"].(string)
+	if !ok {
+		return "", fmt.Errorf("subaccount GUID not found in response")
+	}
+
+	return subaccountGUID, nil
+}
+
+// DeleteSubaccount deletes a BTP subaccount by its GUID.
+//
+// This is a synchronous operation. The subaccount must be empty (no service instances)
+// before it can be deleted, otherwise the operation will fail.
+func (c *btpClient) DeleteSubaccount(ctx context.Context, subaccountGUID string) error {
+	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
+	if accountsServiceURL == "" {
+		return fmt.Errorf("accounts_service_url not found in credentials")
+	}
+
+	endpoint := fmt.Sprintf("%s/accounts/v1/subaccounts/%s", accountsServiceURL, subaccountGUID)
+
+	// Send DELETE request
+	resp, err := c.client.Delete(ctx, endpoint, RequestOptions{})
+	if err != nil {
+		return fmt.Errorf("delete subaccount request failed: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("delete subaccount failed with status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// GetSubaccount retrieves subaccount details for drift detection.
+//
+// Returns true if the subaccount exists, along with its current state.
+// This method is used to verify that the subaccount is in the expected state.
+func (c *btpClient) GetSubaccount(ctx context.Context, subaccountGUID string) (exists bool, state string, err error) {
+	accountsServiceURL := c.credentials.Endpoints["accounts_service_url"]
+	if accountsServiceURL == "" {
+		return false, "", fmt.Errorf("accounts_service_url not found in credentials")
+	}
+
+	endpoint := fmt.Sprintf("%s/accounts/v1/subaccounts/%s", accountsServiceURL, subaccountGUID)
+
+	// Send GET request
+	resp, err := c.client.Get(ctx, endpoint, RequestOptions{})
+	if err != nil {
+		return false, "", fmt.Errorf("get subaccount request failed: %w", err)
+	}
+
+	// 404 means subaccount doesn't exist
+	if resp.StatusCode == 404 {
+		return false, "", nil
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, "", fmt.Errorf("get subaccount failed with status code: %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var subaccountData map[string]interface{}
+	if err := json.Unmarshal(resp.Body, &subaccountData); err != nil {
+		return false, "", fmt.Errorf("failed to parse subaccount response: %w", err)
+	}
+
+	// Extract state
+	stateValue := "UNKNOWN"
+	if s, ok := subaccountData["state"].(string); ok {
+		stateValue = s
+	}
+
+	return true, stateValue, nil
 }

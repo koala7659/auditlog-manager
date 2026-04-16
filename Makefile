@@ -49,6 +49,11 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+.PHONY: mocks
+mocks: ## Generate mocks for interfaces using mockery.
+	@command -v mockery >/dev/null 2>&1 || { echo >&2 "mockery is not installed. Install with: go install github.com/vektra/mockery/v2@latest"; exit 1; }
+	mockery
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...

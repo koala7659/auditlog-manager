@@ -20,26 +20,27 @@ const (
 
 func sFnRun(ctx context.Context, m *fsm, s *systemState) (stateFn, *ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
-	logger.Info("Running FSM to reconcile auditlog instance", "instance", s.instance.Name)
+	logger.Info("Running FSM to reconcile BTP auditlog resources", "instance", s.instance.Name)
 
 	instanceIsBeingDeleted := !s.instance.GetDeletionTimestamp().IsZero()
 	instanceHasFinalizer := controllerutil.ContainsFinalizer(&s.instance, finalizer)
 
-	resourcesArePresent, err := resourcesExists(ctx, m, s)
-	if err != nil {
-		logger.Error(err, "Failed to check resource existence")
-		return updateStatusAndRequeueAfter(requeueErrorInterval)
-	}
-
 	if instanceIsBeingDeleted {
+		resourcesArePresent, err := resourcesExists(ctx, m, s)
+		if err != nil {
+			logger.Error(err, "Failed to check resource existence")
+			return updateStatusAndRequeueAfter(requeueErrorInterval)
+		}
 		if resourcesArePresent {
-			return switchState(sFnDeleteResources)
+			logger.Info("Deletion not yet implemented, removing finalizer", "instance", s.instance.Name)
+			return stop()
 		}
 
 		if instanceHasFinalizer {
 			return removeFinalizerAndStop(ctx, m, s)
 		}
-		logger.Info("Stop processing auditlog instance", "instance", s.instance.Name)
+
+		logger.Info("Auditlog instance is deleted!", "instance", s.instance.Name)
 		return stop()
 	}
 
@@ -47,19 +48,19 @@ func sFnRun(ctx context.Context, m *fsm, s *systemState) (stateFn, *ctrl.Result,
 		return addFinalizerAndRequeue(ctx, m, s)
 	}
 
-	if !resourcesArePresent {
-		return switchState(sFnCreateResources)
+	if s.instance.Spec.SubaccountID == "" {
+		return switchState(sFnCreateSubaccount)
 	}
 
-	logger.Info("Stop processing auditlog instance", "instance", s.instance.Name)
-	return stop()
+	logger.Info("SubaccountID already set in spec, delegating to verification", "subaccountID", s.instance.Spec.SubaccountID)
+	return switchState(sFnVerifySubaccount)
 }
 
 func addFinalizerAndRequeue(ctx context.Context, m *fsm, s *systemState) (stateFn, *ctrl.Result, error) {
 	controllerutil.AddFinalizer(&s.instance, finalizer)
 	err := m.KcpClient.Update(ctx, &s.instance)
 	if err != nil {
-		return updateStatusAndStopWithError(err)
+		return requeueWithError(err)
 	}
 	return requeue()
 }
@@ -68,13 +69,17 @@ func removeFinalizerAndStop(ctx context.Context, m *fsm, s *systemState) (stateF
 	controllerutil.RemoveFinalizer(&s.instance, finalizer)
 	err := m.KcpClient.Update(ctx, &s.instance)
 	if err != nil {
-		return updateStatusAndStopWithError(err)
+		return requeueWithError(err)
 	}
 	return stop()
 }
 
 func resourcesExists(ctx context.Context, m *fsm, s *systemState) (bool, error) {
-	status, err := m.BTPClient.VerifyLoggingStack(ctx, s.instance.Spec.TenantID)
+	if s.instance.Spec.SubaccountID == "" {
+		return false, nil
+	}
+
+	status, err := m.BTPClient.VerifyLoggingStack(ctx, s.instance.Spec.SubaccountID)
 	if err != nil {
 		return false, err
 	}

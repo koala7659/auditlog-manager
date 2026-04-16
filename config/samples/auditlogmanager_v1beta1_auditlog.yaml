@@ -6,7 +6,22 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: auditlog-sample
 spec:
-  region: "test-region"
-  runtimeID: "test-runtime-id"
-  subaccountID: "test-subaccount-id"
-  tenantID: "test-tenant-id"
+  # Input date for configuration - to be moved to configuration administrators
+  # this is protected by controller - users should not be able to change it, but it is required for controller to work, so we need to set it in the sample
+  region: "us10-staging"                          # BTP region (e.g., us10-staging)
+  subaccountID: ""                                # BTP subaccount ID (set by controller)
+  config:                                         # Configuration for audit log service
+    serviceURL: ""                                # Audit Log Service URL
+    tenantID: ""                                  # Tenant ID for the audit log service
+    gardenerSecretName: ""                        # Name of Gardener secret with write credentials
+    configMapRef: test                            # Name of ConfigMap containing audit log policies - future enhancement for dynamic policy updates
+  readCredentials:                                # Read credentials stored directly in resource
+    url:
+    username:
+    password:
+  retentionDays: 55                              # Configurable retention period (default: 90)
+
+
+#  globalAccountID: "461f6292-8085-41c8-af0c-e185f39b5e18"     # BTP global account GUID (required)
+#  move to configuration - configuration dministrators:                                 # List of admin email addresses (required)
+#    - "przemyslaw.golicz@sap.com"

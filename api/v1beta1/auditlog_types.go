@@ -22,79 +22,143 @@ import (
 )
 
 // State defines the observed state of AuditLog
-// +kubebuilder:validation:Enum=Ready;Processing;Warning;Error;Deleting
+// +kubebuilder:validation:Enum=Pending;RegistrationReady;SimApproved;Assigned;Orphaned
 type State string
+
+// AuditLogConfig contains configuration for audit log service
+type AuditLogConfig struct {
+	// ServiceURL is the Audit Log Service URL
+	// +optional
+	ServiceURL string `json:"serviceURL,omitempty"`
+	// TenantID is the tenant ID for the audit log service
+	// +optional
+	TenantID string `json:"tenantID,omitempty"`
+	// GardenerSecretName is the name of Gardener secret with write credentials
+	// +optional
+	GardenerSecretName string `json:"gardenerSecretName,omitempty"`
+	// ConfigMapRef is the name of ConfigMap containing audit log policies
+	// +optional
+	ConfigMapRef string `json:"configMapRef,omitempty"`
+}
+
+// ReadCredentials contains read-only credentials for accessing audit logs
+type ReadCredentials struct {
+	// URL is the audit log read endpoint
+	// +optional
+	URL string `json:"url,omitempty"`
+	// Username for read access
+	// +optional
+	Username string `json:"username,omitempty"`
+	// Password for read access (base64 encoded)
+	// +optional
+	Password string `json:"password,omitempty"`
+}
 
 // AuditLogSpec defines the desired state of AuditLog
 type AuditLogSpec struct {
-	// Region is a field of AuditLog that defines BTP region where custom audit log stack is created.
+	// Region is the BTP region where the audit log subaccount is provisioned
 	// +required
 	Region string `json:"region"`
-	// SubaccountID is a field of AuditLog that defines SubaccountID owner subaccount for audit log.
+	// GlobalAccountID is the BTP global account ID where the subaccount will be created
 	// +required
-	SubaccountID string `json:"subaccountID"`
-	// RuntimeID is a field of AuditLog that defines the Kyma Runtime that is associated with audit logging stack.
+	// +kubebuilder:validation:MinLength=1
+	GlobalAccountID string `json:"globalAccountID"`
+	// Administrators is the list of admin email addresses for the subaccount
 	// +required
-	RuntimeID string `json:"runtimeID"`
-	// TenantID is a field of AuditLog that defines the tenant ID that is associated with audit logging stack.
-	// +required
-	TenantID string `json:"tenantID"`
+	// +kubebuilder:validation:MinItems=1
+	Administrators []string `json:"administrators"`
+	// SubaccountID is the BTP subaccount ID (provisioned by controller)
+	// +optional
+	SubaccountID string `json:"subaccountID,omitempty"`
+	// Config contains configuration for audit log service
+	// +optional
+	Config AuditLogConfig `json:"config,omitempty"`
+	// ReadCredentials contains read-only credentials stored directly in the resource
+	// +optional
+	ReadCredentials ReadCredentials `json:"readCredentials,omitempty"`
+	// RetentionDays is the retention period in days (default: 90)
+	// +kubebuilder:default=90
+	// +optional
+	RetentionDays int `json:"retentionDays,omitempty"`
 }
 
 // Valid AuditLog States.
 const (
-	// StateReady signifies AuditLog is ready and has been created successfully.
-	StateReady State = "Ready"
+	// StatePending signifies AuditLog is pending provisioning of BTP resources.
+	StatePending State = "Pending"
 
-	// StateProcessing signifies AuditLog is reconciling and is in the process of Creation.
-	// Processing can also signal that the Installation previously encountered an error and is now recovering.
-	StateProcessing State = "Processing"
+	// StateRegistrationReady signifies BTP resources are fully provisioned and ready for SIM registration.
+	StateRegistrationReady State = "RegistrationReady"
 
-	// StateWarning signifies a warning for AuditLog. This signifies that the Creation
-	// process encountered a problem.
-	StateWarning State = "Warning"
+	// StateSimApproved signifies the subaccount has been approved by SIM team and is available in the pool.
+	StateSimApproved State = "SimApproved"
 
-	// StateError signifies an error for AuditLog. This signifies that the Creation
-	// process encountered an error.
-	// Contrary to Processing, it can be expected that this state should change on the next retry.
-	StateError State = "Error"
+	// StateAssigned signifies AuditLog is assigned to and in use by a Kyma Runtime.
+	StateAssigned State = "Assigned"
 
-	// StateDeleting signifies AuditLog has been deleted.
-	// This is the state that is used when a deletionTimestamp was detected and Finalizers are picked up.
-	StateDeleting State = "Deleting"
+	// StateOrphaned signifies the runtime has been deleted but audit logs are retained for the retention period.
+	StateOrphaned State = "Orphaned"
 )
 
-var (
-	ConditionTypeStartup = "Starting"
-	ConditionReasonReady = "Ready"
+// Condition types for detailed status tracking
+const (
+	// ConditionTypeSubaccountReady indicates if BTP subaccount exists and is accessible
+	ConditionTypeBTPResources = "BTPResourcesProvisioned"
+
+	// ConditionTypeSubaccountReady indicates if BTP subaccount exists and is accessible
+	ConditionTypeSubaccountReady = "SubaccountReady"
+
+	// ConditionTypeServiceInstanceReady indicates if Audit Log Service instance is provisioned
+	ConditionTypeServiceInstanceReady = "ServiceInstanceReady"
+
+	// ConditionTypeBindingReady indicates if service binding exists and credentials are retrievable
+	ConditionTypeBindingReady = "BindingReady"
+
+	// ConditionTypeCredentialsStored indicates if credentials are stored in Gardener and AuditLog CR
+	ConditionTypeCredentialsStored = "CredentialsStored"
+
+	// ConditionTypeReady indicates overall resource health
+	ConditionTypeReady = "ResourcesReady"
+)
+
+// Condition reasons
+const (
+	ConditionReasonCreated       = "Created"
+	ConditionReasonProvisioning  = "Provisioning"
+	ConditionReasonReady         = "Ready"
+	ConditionReasonFailed        = "Failed"
+	ConditionReasonCISAPIError   = "CISAPIError"
+	ConditionReasonQuotaExceeded = "QuotaExceeded"
 )
 
 // AuditLogStatus defines the observed state of AuditLog.
 type AuditLogStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
 	// conditions represent the current state of the AuditLog resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// state represents the current state of the AuditLog resource.
-	// +kubebuilder:validation:Enum=Ready;Processing;Warning;Error;Deleting
-	// +kubebuilder:default=Processing
+	// +kubebuilder:validation:Enum=Pending;RegistrationReady;SimApproved;Assigned;Orphaned
+	// +kubebuilder:default=Pending
 	State State `json:"state"`
+
+	// assignedToRuntime is the runtime ID this AuditLog is assigned to (empty when in pool)
+	// +optional
+	AssignedToRuntime string `json:"assignedToRuntime,omitempty"`
+
+	// createdAt is the timestamp when the AuditLog was created
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// assignedAt is the timestamp when the AuditLog was assigned to a runtime
+	// +optional
+	AssignedAt *metav1.Time `json:"assignedAt,omitempty"`
+
+	// orphanedAt is the timestamp when the AuditLog became orphaned
+	// +optional
+	OrphanedAt *metav1.Time `json:"orphanedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -136,23 +200,31 @@ func (s *AuditLogStatus) WithState(state State) *AuditLogStatus {
 	return s
 }
 
-func (s *AuditLogStatus) WithInstallConditionStatus(status metav1.ConditionStatus, objGeneration int64) *AuditLogStatus {
+func (s *AuditLogStatus) WithCondition(conditionType string, status metav1.ConditionStatus, reason, message string, objGeneration int64) *AuditLogStatus {
 	if s.Conditions == nil {
 		s.Conditions = make([]metav1.Condition, 0, 1)
 	}
 
-	condition := meta.FindStatusCondition(s.Conditions, ConditionTypeStartup)
+	condition := meta.FindStatusCondition(s.Conditions, conditionType)
 
 	if condition == nil {
 		condition = &metav1.Condition{
-			Type:    ConditionTypeStartup,
-			Reason:  ConditionReasonReady,
-			Message: "Starting auditlog instance",
+			Type:    conditionType,
+			Reason:  reason,
+			Message: message,
 		}
+	} else {
+		condition.Reason = reason
+		condition.Message = message
 	}
 
 	condition.Status = status
 	condition.ObservedGeneration = objGeneration
 	meta.SetStatusCondition(&s.Conditions, *condition)
 	return s
+}
+
+// Deprecated: Use WithCondition instead
+func (s *AuditLogStatus) WithInstallConditionStatus(status metav1.ConditionStatus, objGeneration int64) *AuditLogStatus {
+	return s.WithCondition(ConditionTypeReady, status, ConditionReasonProvisioning, "Provisioning audit log resources", objGeneration)
 }

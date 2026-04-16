@@ -20,12 +20,12 @@ func updateStatusAndStop() (stateFn, *ctrl.Result, error) {
 	return sFnUpdateStatus(nil, nil), nil, nil
 }
 
-func updateStatusAndStopWithError(err error) (stateFn, *ctrl.Result, error) {
-	return sFnUpdateStatus(nil, err), nil, nil
-}
-
 func requeue() (stateFn, *ctrl.Result, error) {
 	return nil, &ctrl.Result{Requeue: true}, nil
+}
+
+func requeueWithError(err error) (stateFn, *ctrl.Result, error) {
+	return nil, nil, err
 }
 
 func requeueAfter(d time.Duration) (stateFn, *ctrl.Result, error) {

@@ -51,42 +51,83 @@ spec:
           spec:
             description: AuditLogSpec defines the desired state of AuditLog
             properties:
+              administrators:
+                description: Administrators is the list of admin email addresses for
+                  the subaccount
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              config:
+                description: Config contains configuration for audit log service
+                properties:
+                  configMapRef:
+                    description: ConfigMapRef is the name of ConfigMap containing
+                      audit log policies
+                    type: string
+                  gardenerSecretName:
+                    description: GardenerSecretName is the name of Gardener secret
+                      with write credentials
+                    type: string
+                  serviceURL:
+                    description: ServiceURL is the Audit Log Service URL
+                    type: string
+                  tenantID:
+                    description: TenantID is the tenant ID for the audit log service
+                    type: string
+                type: object
+              globalAccountID:
+                description: GlobalAccountID is the BTP global account ID where the
+                  subaccount will be created
+                minLength: 1
+                type: string
+              readCredentials:
+                description: ReadCredentials contains read-only credentials stored
+                  directly in the resource
+                properties:
+                  password:
+                    description: Password for read access (base64 encoded)
+                    type: string
+                  url:
+                    description: URL is the audit log read endpoint
+                    type: string
+                  username:
+                    description: Username for read access
+                    type: string
+                type: object
               region:
-                description: Region is a field of AuditLog that defines BTP region
-                  where custom audit log stack is created.
+                description: Region is the BTP region where the audit log subaccount
+                  is provisioned
                 type: string
-              runtimeID:
-                description: RuntimeID is a field of AuditLog that defines the Kyma
-                  Runtime that is associated with audit logging stack.
-                type: string
+              retentionDays:
+                default: 90
+                description: 'RetentionDays is the retention period in days (default:
+                  90)'
+                type: integer
               subaccountID:
-                description: SubaccountID is a field of AuditLog that defines SubaccountID
-                  owner subaccount for audit log.
-                type: string
-              tenantID:
-                description: TenantID is a field of AuditLog that defines the tenant
-                  ID that is associated with audit logging stack.
+                description: SubaccountID is the BTP subaccount ID (provisioned by
+                  controller)
                 type: string
             required:
+            - administrators
+            - globalAccountID
             - region
-            - runtimeID
-            - subaccountID
-            - tenantID
             type: object
           status:
             description: status defines the observed state of AuditLog
             properties:
+              assignedAt:
+                description: assignedAt is the timestamp when the AuditLog was assigned
+                  to a runtime
+                format: date-time
+                type: string
+              assignedToRuntime:
+                description: assignedToRuntime is the runtime ID this AuditLog is
+                  assigned to (empty when in pool)
+                type: string
               conditions:
-                description: |-
-                  conditions represent the current state of the AuditLog resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: conditions represent the current state of the AuditLog
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -145,21 +186,30 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              createdAt:
+                description: createdAt is the timestamp when the AuditLog was created
+                format: date-time
+                type: string
+              orphanedAt:
+                description: orphanedAt is the timestamp when the AuditLog became
+                  orphaned
+                format: date-time
+                type: string
               state:
                 allOf:
                 - enum:
-                  - Ready
-                  - Processing
-                  - Warning
-                  - Error
-                  - Deleting
+                  - Pending
+                  - RegistrationReady
+                  - SimApproved
+                  - Assigned
+                  - Orphaned
                 - enum:
-                  - Ready
-                  - Processing
-                  - Warning
-                  - Error
-                  - Deleting
-                default: Processing
+                  - Pending
+                  - RegistrationReady
+                  - SimApproved
+                  - Assigned
+                  - Orphaned
+                default: Pending
                 description: state represents the current state of the AuditLog resource.
                 type: string
             required:
